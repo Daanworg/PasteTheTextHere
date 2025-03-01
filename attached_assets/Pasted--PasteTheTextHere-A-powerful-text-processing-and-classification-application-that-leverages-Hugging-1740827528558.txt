@@ -1,0 +1,75 @@
+# PasteTheTextHere
+
+A powerful text processing and classification application that leverages Hugging Face models and datasets with advanced RAG (Retrieval-Augmented Generation) capabilities.
+
+## Features
+
+- **Text Processing**: Clean and preprocess text with options for stopword removal and lemmatization
+- **Text Classification**: Use zero-shot classification with custom labels
+- **Text Summarization**: Generate concise summaries of longer texts
+- **Text Statistics**: Get word counts, sentence counts, and other metrics
+- **Data Management**: Save and search processed texts locally
+- **Hugging Face Integration**:
+  - Import datasets from Hugging Face Hub
+  - Export your processed data to Hugging Face datasets
+  - Use state-of-the-art NLP models for processing
+
+## Upcoming Features
+
+- **RAG Integration**: Implement Retrieval-Augmented Generation for more accurate question answering based on your documents
+- **Document Processing**: Add support for PDF processing with OCR capabilities
+- **Vector Search**: Implement semantic search with vector embeddings for more effective information retrieval
+- **Automated Processing**: Add triggers for processing batches of documents automatically
+- **Cloud Integration**: Enable storage and processing on cloud platforms like Google Cloud
+- **API Backend**: Create a REST API for headless operation and integration with other systems
+
+## Installation
+
+1. Clone the repository:
+   ```
+   git clone https://github.com/Daanworg/PasteTheTextHere.git
+   cd PasteTheTextHere
+   ```
+
+2. Install dependencies:
+   ```
+   pip install -e .
+   ```
+
+3. Configure environment variables:
+   
+   Either set them directly:
+   ```
+   export HUGGINGFACE_API_KEY="your-api-key"
+   export HF_USERNAME="your-username"
+   export HF_DATASET_NAME="your-dataset-name"  # Optional
+   ```
+   
+   Or create a `.env` file in the project root with the following content:
+   ```
+   HUGGINGFACE_API_KEY=your-api-key
+   HF_USERNAME=your-username
+   HF_DATASET_NAME=your-dataset-name  # Optional
+   ```
+
+## Usage
+
+Start the application with:
+```
+streamlit run app.py
+```
+
+## Components
+
+- **TextProcessor**: Handles text cleaning, tokenization, and statistics
+- **ModelHandler**: Manages Hugging Face models for classification and summarization
+- **DataManager**: Handles data storage, retrieval, and Hugging Face dataset integration
+- **app.py**: Streamlit interface that brings everything together
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.

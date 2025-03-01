@@ -1,0 +1,199 @@
+import pandas as pd
+import json
+from datetime import datetime
+import os
+import logging
+from datasets import Dataset, DatasetDict
+from huggingface_hub import HfApi, Repository
+import tempfile
+import shutil
+
+class DataManager:
+    def __init__(self):
+        self.data_file = "processed_texts.csv"
+        self.dataset_name = os.getenv("HF_DATASET_NAME", "local_dataset")
+        self.api_key = os.getenv("HUGGINGFACE_API_KEY")
+        self.hf_username = os.getenv("HF_USERNAME")
+        self.initialize_storage()
+        self.api = HfApi(token=self.api_key) if self.api_key else None
+
+    def initialize_storage(self):
+        """Initialize the storage file if it doesn't exist"""
+        if not os.path.exists(self.data_file):
+            df = pd.DataFrame(columns=[
+                'id', 'original_text', 'processed_text', 
+                'classification', 'confidence_score',
+                'timestamp', 'labels', 'summary'
+            ])
+            df.to_csv(self.data_file, index=False)
+            logging.info(f"Created new data file: {self.data_file}")
+
+    def save_processed_text(self, original_text, processed_text, classification_results, summary=None):
+        """Save processed text and its metadata"""
+        try:
+            # Load existing data
+            df = pd.read_csv(self.data_file) if os.path.exists(self.data_file) else pd.DataFrame(columns=[
+                'id', 'original_text', 'processed_text', 
+                'classification', 'confidence_score',
+                'timestamp', 'labels', 'summary'
+            ])
+            
+            # Create new entry
+            new_entry = {
+                'id': len(df) + 1,
+                'original_text': original_text,
+                'processed_text': processed_text,
+                'classification': json.dumps(classification_results.get('labels', [])),
+                'confidence_score': json.dumps(classification_results.get('scores', [])),
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'labels': json.dumps(classification_results),
+                'summary': summary if summary else ""
+            }
+            
+            # Add to DataFrame
+            df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+            df.to_csv(self.data_file, index=False)
+            logging.info(f"Saved new entry with ID: {new_entry['id']}")
+            
+            return new_entry['id']
+        except Exception as e:
+            logging.error(f"Error saving data: {e}")
+            raise Exception(f"Error saving data: {e}")
+
+    def search_texts(self, query=None, label=None, min_confidence=0.0):
+        """Search stored texts by query or label"""
+        try:
+            if not os.path.exists(self.data_file):
+                return []
+                
+            df = pd.read_csv(self.data_file)
+            if df.empty:
+                return []
+            
+            if query:
+                df = df[df['processed_text'].str.contains(query, case=False, na=False)]
+            
+            if label:
+                df = df[df['classification'].apply(lambda x: label in str(x))]
+                
+            if min_confidence > 0.0:
+                # Filter by confidence score
+                df = df[df.apply(
+                    lambda row: any(
+                        score >= min_confidence 
+                        for score in json.loads(row['confidence_score'])
+                    ), 
+                    axis=1
+                )]
+            
+            return df.to_dict('records')
+        except Exception as e:
+            logging.error(f"Error searching data: {e}")
+            raise Exception(f"Error searching data: {e}")
+            
+    def export_to_hf_dataset(self, push_to_hub=False):
+        """Convert the local data to a Hugging Face dataset and optionally push to Hub"""
+        try:
+            if not os.path.exists(self.data_file):
+                raise FileNotFoundError(f"Data file {self.data_file} not found")
+                
+            df = pd.read_csv(self.data_file)
+            if df.empty:
+                raise ValueError("No data available to export")
+                
+            # Convert string representations back to Python objects
+            df['classification_list'] = df['classification'].apply(json.loads)
+            df['confidence_list'] = df['confidence_score'].apply(json.loads)
+            
+            # Create a Dataset object
+            dataset = Dataset.from_pandas(df)
+            dataset_dict = DatasetDict({"train": dataset})
+            
+            logging.info(f"Created Hugging Face dataset with {len(dataset)} examples")
+            
+            if push_to_hub and self.api_key and self.hf_username:
+                # Push to Hugging Face Hub
+                if not self.dataset_name or self.dataset_name == "local_dataset":
+                    raise ValueError("Please set HF_DATASET_NAME environment variable to push to Hub")
+                
+                full_dataset_name = f"{self.hf_username}/{self.dataset_name}"
+                
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    dataset_dict.save_to_disk(tmp_dir)
+                    dataset_dict.push_to_hub(
+                        full_dataset_name, 
+                        token=self.api_key,
+                        private=True
+                    )
+                logging.info(f"Dataset pushed to Hugging Face Hub: {full_dataset_name}")
+                return {"status": "success", "dataset_name": full_dataset_name}
+            
+            return {"status": "success", "dataset": dataset_dict}
+            
+        except Exception as e:
+            logging.error(f"Error exporting to Hugging Face dataset: {e}")
+            raise Exception(f"Error exporting to Hugging Face dataset: {e}")
+            
+    def import_from_hf_dataset(self, dataset_name, split="train"):
+        """Import data from a Hugging Face dataset"""
+        try:
+            if not self.api_key:
+                raise ValueError("HUGGINGFACE_API_KEY environment variable is not set")
+                
+            from datasets import load_dataset
+            
+            logging.info(f"Loading dataset {dataset_name} from Hugging Face Hub")
+            dataset = load_dataset(dataset_name, split=split, token=self.api_key)
+            
+            # Convert to DataFrame
+            df = dataset.to_pandas()
+            
+            # Check if required columns are present
+            required_cols = ['original_text', 'processed_text']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if missing_cols:
+                # Try to map common column names to expected format
+                mapping = {
+                    'text': 'original_text',
+                    'input_text': 'original_text',
+                    'cleaned_text': 'processed_text',
+                    'processed': 'processed_text'
+                }
+                
+                for src, dst in mapping.items():
+                    if src in df.columns and dst in missing_cols:
+                        df[dst] = df[src]
+                        missing_cols.remove(dst)
+            
+            if missing_cols:
+                raise ValueError(f"Dataset is missing required columns: {missing_cols}")
+            
+            # Update the local CSV file
+            max_id = 0
+            if os.path.exists(self.data_file):
+                existing_df = pd.read_csv(self.data_file)
+                if not existing_df.empty:
+                    max_id = existing_df['id'].max()
+                    
+            # Add IDs and timestamps if missing
+            if 'id' not in df.columns:
+                df['id'] = list(range(max_id + 1, max_id + 1 + len(df)))
+            if 'timestamp' not in df.columns:
+                df['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+            # Backup existing file
+            if os.path.exists(self.data_file):
+                backup_file = f"{self.data_file}.bak"
+                shutil.copy2(self.data_file, backup_file)
+                logging.info(f"Backed up existing data to {backup_file}")
+                
+            # Save to CSV
+            df.to_csv(self.data_file, index=False)
+            logging.info(f"Imported {len(df)} records from dataset {dataset_name}")
+            
+            return {"status": "success", "records_imported": len(df)}
+            
+        except Exception as e:
+            logging.error(f"Error importing from Hugging Face dataset: {e}")
+            raise Exception(f"Error importing from Hugging Face dataset: {e}")

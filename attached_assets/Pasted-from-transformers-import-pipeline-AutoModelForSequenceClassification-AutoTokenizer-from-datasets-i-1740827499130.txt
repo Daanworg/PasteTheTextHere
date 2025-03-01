@@ -1,0 +1,164 @@
+from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer
+from datasets import load_dataset, Dataset
+import os
+import logging
+import torch
+import pandas as pd
+
+class ModelHandler:
+    def __init__(self):
+        self.api_key = os.getenv("HUGGINGFACE_API_KEY")
+        if not self.api_key:
+            raise ValueError("HUGGINGFACE_API_KEY environment variable is not set")
+
+        logging.info("Initializing ModelHandler with HuggingFace API key")
+        self.classifier = None
+        self.zero_shot_classifier = None
+        self.summarizer = None
+        self.tokenizer = None
+        self.model = None
+        self.available_models = {
+            "zero-shot": "facebook/bart-large-mnli",
+            "sentiment": "distilbert-base-uncased-finetuned-sst-2-english",
+            "summarization": "facebook/bart-large-cnn"
+        }
+
+        # Initialize models with better error handling
+        try:
+            self.initialize_models()
+        except Exception as e:
+            logging.error(f"Failed to initialize models: {e}")
+            raise
+
+    def initialize_models(self):
+        """Initialize the classification models with detailed error logging"""
+        try:
+            logging.info("Starting model initialization...")
+
+            # Verify PyTorch installation
+            logging.info(f"PyTorch version: {torch.__version__}")
+            logging.info(f"CUDA available: {torch.cuda.is_available()}")
+            device = 0 if torch.cuda.is_available() else -1
+
+            # Zero-shot classification pipeline
+            logging.info("Initializing zero-shot classification pipeline...")
+            self.zero_shot_classifier = pipeline(
+                "zero-shot-classification",
+                model=self.available_models["zero-shot"],
+                token=self.api_key,
+                device=device
+            )
+            logging.info("Zero-shot classification pipeline initialized successfully")
+
+            # Sentiment analysis pipeline
+            logging.info("Initializing sentiment analysis pipeline...")
+            self.classifier = pipeline(
+                "text-classification",
+                model=self.available_models["sentiment"],
+                token=self.api_key,
+                device=device
+            )
+            logging.info("Sentiment analysis pipeline initialized successfully")
+            
+            # Summarization pipeline
+            logging.info("Initializing summarization pipeline...")
+            self.summarizer = pipeline(
+                "summarization",
+                model=self.available_models["summarization"],
+                token=self.api_key,
+                device=device
+            )
+            logging.info("Summarization pipeline initialized successfully")
+
+        except Exception as e:
+            logging.error(f"Error initializing models: {str(e)}")
+            logging.error("Model initialization failed. Please check your HuggingFace API key and network connection.")
+            raise RuntimeError(f"Failed to initialize models: {str(e)}")
+
+    def classify_text(self, text, labels=None):
+        """Classify text using pre-defined or custom labels"""
+        if not text:
+            return {}
+
+        try:
+            logging.info("Starting text classification...")
+            if labels:
+                # Use zero-shot classification with custom labels
+                if not self.zero_shot_classifier:
+                    raise RuntimeError("Zero-shot classifier not initialized")
+
+                logging.info(f"Performing zero-shot classification with labels: {labels}")
+                result = self.zero_shot_classifier(
+                    text,
+                    candidate_labels=labels,
+                    multi_label=True
+                )
+                return {
+                    'labels': result['labels'],
+                    'scores': result['scores']
+                }
+            else:
+                # Use standard classification
+                if not self.classifier:
+                    raise RuntimeError("Text classifier not initialized")
+
+                logging.info("Performing standard text classification")
+                result = self.classifier(text)
+                return {
+                    'label': result[0]['label'],
+                    'score': result[0]['score']
+                }
+        except Exception as e:
+            logging.error(f"Classification error: {str(e)}")
+            raise RuntimeError(f"Failed to classify text: {str(e)}")
+            
+    def summarize_text(self, text, max_length=150, min_length=30):
+        """Summarize text using pre-trained model"""
+        if not text or len(text.split()) < min_length:
+            return text
+            
+        try:
+            logging.info("Starting text summarization...")
+            if not self.summarizer:
+                raise RuntimeError("Summarizer not initialized")
+                
+            result = self.summarizer(
+                text, 
+                max_length=max_length, 
+                min_length=min_length, 
+                do_sample=False
+            )
+            
+            return result[0]['summary_text']
+        except Exception as e:
+            logging.error(f"Summarization error: {str(e)}")
+            raise RuntimeError(f"Failed to summarize text: {str(e)}")
+            
+    def load_hf_dataset(self, dataset_name, split="train"):
+        """Load a dataset from Hugging Face Hub"""
+        try:
+            logging.info(f"Loading dataset: {dataset_name}")
+            dataset = load_dataset(dataset_name, token=self.api_key, split=split)
+            return dataset
+        except Exception as e:
+            logging.error(f"Error loading dataset: {str(e)}")
+            raise RuntimeError(f"Failed to load dataset: {str(e)}")
+            
+    def create_dataset_from_df(self, dataframe, text_column):
+        """Create a Hugging Face dataset from a pandas DataFrame"""
+        try:
+            logging.info("Creating dataset from DataFrame")
+            dataset = Dataset.from_pandas(dataframe)
+            return dataset
+        except Exception as e:
+            logging.error(f"Error creating dataset: {str(e)}")
+            raise RuntimeError(f"Failed to create dataset: {str(e)}")
+            
+    def fine_tune_model(self, model_name, dataset, text_column, label_column):
+        """Fine-tune a model on custom data (placeholder - advanced implementation needed)"""
+        logging.info("Fine-tuning functionality requires additional setup")
+        logging.info("Please refer to Hugging Face documentation for full fine-tuning pipeline")
+        return {
+            "status": "not_implemented",
+            "message": "Fine-tuning requires additional setup with Hugging Face's Trainer API"
+        }
