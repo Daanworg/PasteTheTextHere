@@ -1,0 +1,827 @@
+import streamlit as st
+from text_processor import TextProcessor
+from model_handler import ModelHandler
+from data_manager import DataManager
+from rag_extension import RAGSystem
+import logging
+import os
+import json
+import pandas as pd
+import time
+from dotenv import load_dotenv
+import tempfile
+from PIL import Image
+import base64
+
+# Load environment variables from .env file
+env_path = '.env'
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    logging.info("Loaded environment variables from .env file")
+else:
+    logging.warning("No .env file found. Make sure to set environment variables manually.")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Initialize components
+@st.cache_resource
+def init_components():
+    try:
+        text_processor = TextProcessor()
+        model_handler = ModelHandler()
+        data_manager = DataManager()
+        
+        # Initialize RAG system if API key is available
+        rag_system = None
+        if os.getenv("HUGGINGFACE_API_KEY"):
+            rag_system = RAGSystem()
+            
+        return text_processor, model_handler, data_manager, rag_system
+    except Exception as e:
+        st.error(f"Failed to initialize components: {str(e)}")
+        raise
+
+# Custom CSS for better UI
+def local_css():
+    st.markdown("""
+    <style>
+    .main {
+        background-color: #f8f9fa;
+    }
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    h1, h2, h3 {
+        color: #1f6feb;
+    }
+    .stButton>button {
+        background-color: #1f6feb;
+        color: white;
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        border: none;
+    }
+    .stButton>button:hover {
+        background-color: #0d53bf;
+    }
+    .stTextInput>div>div>input {
+        border-radius: 4px;
+    }
+    .stTextArea>div>div>textarea {
+        border-radius: 4px;
+    }
+    .sidebar .sidebar-content {
+        background-color: #f1f3f5;
+    }
+    .css-1lcbmhc .css-1wrcr25 {
+        background-color: #e9ecef;
+    }
+    .stExpander {
+        border-radius: 4px;
+        border: 1px solid #dee2e6;
+        margin-bottom: 0.75rem;
+    }
+    .css-1y4p8pa {
+        max-width: 1200px;
+    }
+    .rag-card {
+        padding: 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin-bottom: 1rem;
+        background-color: white;
+    }
+    .rag-chunks {
+        padding: 1rem;
+        border-radius: 4px;
+        background-color: #f1f3f5;
+        margin-bottom: 0.75rem;
+    }
+    .rag-highlight {
+        background-color: #ffeeba;
+    }
+    .classif-label {
+        display: inline-block;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+        background-color: #e9ecef;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Function to create beautiful app header
+def create_header():
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.image("generated-icon.png", width=100)
+    with col2:
+        st.title("PasteTheTextHere")
+        st.markdown("*Advanced text processing with Hugging Face and RAG*")
+
+try:
+    text_processor, model_handler, data_manager, rag_system = init_components()
+
+    # Set up the page
+    st.set_page_config(
+        page_title="PasteTheTextHere",
+        page_icon="📝",
+        layout="wide"
+    )
+    
+    # Apply custom CSS
+    local_css()
+    
+    # Create header
+    create_header()
+    
+    # Check for API key
+    if not os.getenv("HUGGINGFACE_API_KEY"):
+        st.warning("⚠️ HUGGINGFACE_API_KEY environment variable is not set. Please set it in the Settings tab or in the .env file. HuggingFace features will not work correctly without an API key.")
+    
+    # App tabs with nice icons
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🔤 Text Processing", 
+        "🔍 Search & Filter", 
+        "🧩 RAG System",
+        "📊 Datasets", 
+        "⚙️ Settings"
+    ])
+    
+    with tab1:
+        st.markdown("""
+        <div class="rag-card">
+        <h2>Text Processing and Classification</h2>
+        <p>Clean, analyze, classify, and summarize your text using advanced NLP models.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Move sidebar content to columns for better UI
+        col1, col2 = st.columns([2, 1])
+        
+        with col2:
+            st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+            st.subheader("Processing Options")
+            remove_stopwords = st.checkbox("Remove Stop Words", value=True)
+            lemmatize = st.checkbox("Lemmatize Text", value=True)
+            generate_summary = st.checkbox("Generate Summary", value=False)
+
+            st.subheader("Classification Labels")
+            custom_labels = st.text_area(
+                "Enter custom labels (one per line)",
+                value="business\ntechnology\nhealth\nentertainment",
+                height=120
+            )
+            custom_labels = [label.strip() for label in custom_labels.split("\n") if label.strip()]
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Main content area
+        with col1:
+            st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+            st.subheader("Input Text")
+            input_text = st.text_area("Paste your text here:", height=250)
+            process_btn = st.button("Process Text", use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            if process_btn:
+                if input_text:
+                    try:
+                        # Create a placeholder for the loading animation
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Process in steps to show progress
+                        status_text.text("Cleaning text...")
+                        progress_bar.progress(10)
+                        
+                        # Clean and process text
+                        processed_text = text_processor.clean_text(
+                            input_text,
+                            remove_stopwords=remove_stopwords,
+                            lemmatize=lemmatize
+                        )
+                        progress_bar.progress(30)
+                        
+                        status_text.text("Calculating statistics...")
+                        # Get text statistics
+                        stats = text_processor.get_text_stats(input_text)
+                        progress_bar.progress(40)
+                        
+                        status_text.text("Classifying text...")
+                        # Classify text
+                        classification_results = model_handler.classify_text(
+                            processed_text,
+                            labels=custom_labels
+                        )
+                        progress_bar.progress(70)
+                        
+                        # Generate summary if requested
+                        summary = None
+                        if generate_summary and len(input_text.split()) > 30:
+                            status_text.text("Generating summary...")
+                            summary = model_handler.summarize_text(input_text)
+                        progress_bar.progress(90)
+                        
+                        status_text.text("Saving results...")
+                        # Save results
+                        text_id = data_manager.save_processed_text(
+                            input_text,
+                            processed_text,
+                            classification_results,
+                            summary=summary
+                        )
+                        progress_bar.progress(100)
+                        
+                        # Clear status elements
+                        status_text.empty()
+                        time.sleep(0.5)
+                        progress_bar.empty()
+
+                        # Display results in a nice card format
+                        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+                        st.subheader("Processing Results")
+                        
+                        # Display classification with nice styling
+                        st.markdown("#### Classification")
+                        classification_html = '<div style="margin-bottom: 1rem;">'
+                        for label, score in zip(
+                            classification_results['labels'],
+                            classification_results['scores']
+                        ):
+                            # Calculate a color based on confidence score (green for high, yellow for medium, red for low)
+                            hue = min(120, int(score * 120))  # 0-120 for hue (red to green)
+                            classification_html += f'<span class="classif-label" style="background-color: hsl({hue}, 80%, 90%); border: 1px solid hsl({hue}, 80%, 80%);">{label}: {score:.2%}</span>'
+                        classification_html += '</div>'
+                        st.markdown(classification_html, unsafe_allow_html=True)
+                        
+                        # Summary in a highlighted box if available
+                        if summary:
+                            st.markdown("#### Summary")
+                            st.markdown(f'<div style="padding: 0.8rem; background-color: #e2f0fd; border-radius: 4px; margin-bottom: 1rem; border-left: 4px solid #1f6feb;">{summary}</div>', unsafe_allow_html=True)
+                        
+                        # Text statistics in a nicely formatted way
+                        st.markdown("#### Text Statistics")
+                        col_stats1, col_stats2 = st.columns(2)
+                        
+                        with col_stats1:
+                            for key in list(stats.keys())[:len(stats)//2]:
+                                st.metric(
+                                    label=key.replace('_', ' ').title(), 
+                                    value=f"{stats[key]:.0f}" if isinstance(stats[key], (int, float)) else stats[key]
+                                )
+                                
+                        with col_stats2:
+                            for key in list(stats.keys())[len(stats)//2:]:
+                                st.metric(
+                                    label=key.replace('_', ' ').title(), 
+                                    value=f"{stats[key]:.0f}" if isinstance(stats[key], (int, float)) else stats[key]
+                                )
+                        
+                        # Show raw processed text in collapsed section
+                        with st.expander("Show processed text"):
+                            st.text_area("", processed_text, height=150)
+                            
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                    except Exception as e:
+                        st.error(f"Error processing text: {str(e)}")
+                        logging.error(f"Processing error: {e}")
+                else:
+                    st.warning("Please enter some text to process.")
+    
+    with tab2:
+        st.markdown("""
+        <div class="rag-card">
+        <h2>Search Your Processed Texts</h2>
+        <p>Find and filter previously processed texts using keywords and classifications.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Search options in a card
+        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+        
+        search_col1, search_col2, search_col3 = st.columns(3)
+
+        with search_col1:
+            search_query = st.text_input("Search by content:", placeholder="Enter keywords...")
+
+        with search_col2:
+            search_label = st.selectbox("Filter by label:", [""] + custom_labels)
+            
+        with search_col3:
+            min_confidence = st.slider("Minimum confidence:", 0.0, 1.0, 0.0, 0.05)
+
+        search_btn = st.button("Search Texts", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        if search_btn:
+            try:
+                with st.spinner("Searching..."):
+                    results = data_manager.search_texts(
+                        search_query, 
+                        search_label,
+                        min_confidence=min_confidence
+                    )
+                
+                if results:
+                    st.success(f"Found {len(results)} matching entries")
+                    
+                    # Display results in cards with pagination if > 5 results
+                    if len(results) > 5:
+                        page_size = 5
+                        page_num = st.select_slider("Page", options=list(range(1, len(results)//page_size + 2)), value=1)
+                        start_idx = (page_num - 1) * page_size
+                        end_idx = min(start_idx + page_size, len(results))
+                        display_results = results[start_idx:end_idx]
+                    else:
+                        display_results = results
+                    
+                    for result in display_results:
+                        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+                        
+                        # Header with timestamp
+                        st.markdown(f"<h3>Entry {result['id']}</h3>", unsafe_allow_html=True)
+                        st.markdown(f"<p><small>📅 {result['timestamp']}</small></p>", unsafe_allow_html=True)
+                        
+                        # Two-column layout for better spacing
+                        col1, col2 = st.columns([3, 2])
+                        
+                        with col1:
+                            if 'summary' in result and result['summary']:
+                                st.markdown("<strong>Summary:</strong>", unsafe_allow_html=True)
+                                st.markdown(f'<div style="padding: 0.8rem; background-color: #e2f0fd; border-radius: 4px; margin-bottom: 1rem; border-left: 4px solid #1f6feb;">{result["summary"]}</div>', unsafe_allow_html=True)
+                            
+                            with st.expander("Show full text"):
+                                st.text_area("", result['original_text'], height=150)
+                                
+                        with col2:
+                            st.markdown("<strong>Classifications:</strong>", unsafe_allow_html=True)
+                            
+                            # Display classifications in badges
+                            labels = json.loads(result['classification'])
+                            scores = json.loads(result['confidence_score'])
+                            
+                            classification_html = '<div>'
+                            for label, score in zip(labels, scores):
+                                score_float = float(score)
+                                hue = min(120, int(score_float * 120))
+                                classification_html += f'<span class="classif-label" style="background-color: hsl({hue}, 80%, 90%); border: 1px solid hsl({hue}, 80%, 80%);">{label}: {score_float:.2%}</span>'
+                            classification_html += '</div>'
+                            st.markdown(classification_html, unsafe_allow_html=True)
+                            
+                        st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.info("No matching entries found.")
+            except Exception as e:
+                st.error(f"Error searching entries: {str(e)}")
+                logging.error(f"Search error: {e}")
+
+    with tab3:
+        if rag_system:
+            st.markdown("""
+            <div class="rag-card">
+            <h2>Retrieval-Augmented Generation (RAG)</h2>
+            <p>Process documents, store chunks with embeddings, and ask questions to get context-aware answers.</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Create tabs for RAG functions
+            rag_tab1, rag_tab2, rag_tab3 = st.tabs([
+                "📄 Document Processing", 
+                "❓ Question Answering", 
+                "💾 Knowledge Base"
+            ])
+            
+            with rag_tab1:
+                st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+                st.subheader("Process Documents for RAG")
+                
+                # Document input options
+                doc_input_method = st.radio(
+                    "Input method:",
+                    ["Text Input", "File Upload"]
+                )
+                
+                document_text = ""
+                metadata = {}
+                
+                if doc_input_method == "Text Input":
+                    document_text = st.text_area("Enter document text:", height=200)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        doc_title = st.text_input("Document title:", placeholder="Enter a title...")
+                    with col2:
+                        doc_source = st.text_input("Document source:", placeholder="Enter source...")
+                    
+                    if doc_title:
+                        metadata["title"] = doc_title
+                    if doc_source:
+                        metadata["source"] = doc_source
+                        
+                else:  # File Upload
+                    uploaded_file = st.file_uploader("Upload document:", type=["txt", "md"])
+                    if uploaded_file:
+                        document_text = uploaded_file.getvalue().decode("utf-8")
+                        metadata["title"] = uploaded_file.name
+                        metadata["source"] = "uploaded file"
+                        st.success(f"File '{uploaded_file.name}' uploaded successfully")
+                
+                # Process document button
+                if st.button("Process Document for RAG", use_container_width=True):
+                    if document_text:
+                        try:
+                            with st.spinner("Processing document..."):
+                                # Process the document
+                                processed_doc = rag_system.process_document(document_text, metadata)
+                                
+                                # Store in temporary dataset
+                                temp_dir = tempfile.mkdtemp()
+                                dataset_path = os.path.join(temp_dir, "temp_dataset")
+                                
+                                dataset = rag_system.save_to_dataset([processed_doc], dataset_path)
+                                
+                                # Store path in session state for later use
+                                if "rag_datasets" not in st.session_state:
+                                    st.session_state.rag_datasets = []
+                                    
+                                dataset_entry = {
+                                    "path": dataset_path,
+                                    "metadata": metadata,
+                                    "chunks": len(processed_doc["chunks"]),
+                                    "title": metadata.get("title", "Untitled Document")
+                                }
+                                
+                                st.session_state.rag_datasets.append(dataset_entry)
+                                
+                            # Show success message
+                            st.success(f"Document processed into {len(processed_doc['chunks'])} chunks")
+                            
+                            # Show first few chunks as preview
+                            st.subheader("Preview of processed chunks:")
+                            for i, chunk in enumerate(processed_doc["chunks"][:3]):
+                                st.markdown(f"""
+                                <div class="rag-chunks">
+                                <strong>Chunk {i+1}:</strong><br>
+                                {chunk["text"][:200]}... 
+                                <br><small>Keywords: {', '.join(chunk["keywords"])}</small>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                            if len(processed_doc["chunks"]) > 3:
+                                st.info(f"{len(processed_doc['chunks']) - 3} more chunks available")
+                                
+                        except Exception as e:
+                            st.error(f"Error processing document: {str(e)}")
+                            logging.error(f"Document processing error: {e}")
+                    else:
+                        st.warning("Please enter or upload document text")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            with rag_tab2:
+                st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+                st.subheader("Ask Questions with RAG")
+                
+                # Check if we have any datasets to query
+                if "rag_datasets" not in st.session_state or not st.session_state.rag_datasets:
+                    st.warning("No documents have been processed yet. Please process at least one document first.")
+                else:
+                    # Select which dataset to query
+                    dataset_options = {
+                        f"{dataset['title']} ({dataset['chunks']} chunks)": i 
+                        for i, dataset in enumerate(st.session_state.rag_datasets)
+                    }
+                    
+                    selected_dataset = st.selectbox(
+                        "Select knowledge base to query:",
+                        options=list(dataset_options.keys())
+                    )
+                    
+                    selected_idx = dataset_options[selected_dataset]
+                    dataset_path = st.session_state.rag_datasets[selected_idx]["path"]
+                    
+                    # Enter question
+                    question = st.text_input("Enter your question:", placeholder="Ask something about the document...")
+                    
+                    top_k = st.slider("Number of chunks to retrieve:", 1, 5, 3)
+                    
+                    # Query button
+                    if st.button("Ask Question", use_container_width=True):
+                        if question:
+                            try:
+                                with st.spinner("Searching for relevant information..."):
+                                    # Load dataset
+                                    from datasets import load_from_disk
+                                    dataset = load_from_disk(dataset_path)
+                                    
+                                    # Retrieve relevant chunks
+                                    relevant_chunks = rag_system.retrieve_relevant_chunks(
+                                        question, dataset, top_k=top_k
+                                    )
+                                    
+                                    # Generate answer
+                                    answer = rag_system.answer_question(question, relevant_chunks)
+                                
+                                # Display answer and sources
+                                st.markdown(f"""
+                                <div style="padding: 1.5rem; background-color: #e2f0fd; border-radius: 8px; margin-bottom: 1.5rem; border-left: 4px solid #1f6feb;">
+                                <h3>Answer</h3>
+                                <p>{answer}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                st.subheader("Sources")
+                                for i, chunk in enumerate(relevant_chunks):
+                                    similarity = chunk.get("similarity", 0)
+                                    
+                                    # Coloring based on similarity score
+                                    color_intensity = int(min(similarity * 100, 100))
+                                    
+                                    st.markdown(f"""
+                                    <div class="rag-chunks" style="border-left: 4px solid rgba(31, 111, 235, {similarity});">
+                                    <strong>Source {i+1}</strong> <small>(Relevance: {similarity:.2f})</small><br>
+                                    {chunk["text"]}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                    
+                            except Exception as e:
+                                st.error(f"Error querying with RAG: {str(e)}")
+                                logging.error(f"RAG query error: {e}")
+                        else:
+                            st.warning("Please enter a question")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            with rag_tab3:
+                st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+                st.subheader("Knowledge Base Management")
+                
+                if "rag_datasets" not in st.session_state or not st.session_state.rag_datasets:
+                    st.info("No documents in knowledge base yet. Process some documents to build your knowledge base.")
+                else:
+                    # Display all processed documents
+                    st.markdown("### Processed Documents")
+                    
+                    for i, dataset in enumerate(st.session_state.rag_datasets):
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        
+                        with col1:
+                            title = dataset.get("title", f"Document {i+1}")
+                            st.markdown(f"**{title}**")
+                            st.markdown(f"<small>{dataset['chunks']} chunks</small>", unsafe_allow_html=True)
+                            
+                        with col2:
+                            st.markdown(f"<small>Source: {dataset.get('metadata', {}).get('source', 'Unknown')}</small>", unsafe_allow_html=True)
+                            
+                        with col3:
+                            if st.button(f"Delete", key=f"del_{i}"):
+                                # Remove from session state
+                                st.session_state.rag_datasets.pop(i)
+                                st.experimental_rerun()
+                    
+                    # Export/Import knowledge base
+                    st.markdown("### Export Knowledge Base")
+                    
+                    if st.button("Export to Hugging Face Dataset"):
+                        st.info("This feature will be implemented in the next release.")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.warning("RAG System requires the Hugging Face API key to be set. Please configure it in the Settings tab.")
+                
+    with tab4:
+        st.markdown("""
+        <div class="rag-card">
+        <h2>Hugging Face Datasets</h2>
+        <p>Import, export, and explore datasets using Hugging Face Hub integration.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Export section
+        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+        st.subheader("Export Data to Hugging Face")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("Export your processed texts as a Hugging Face dataset")
+            dataset_name = st.text_input("Dataset name:", value=data_manager.dataset_name)
+            push_to_hub = st.checkbox("Push to Hugging Face Hub", value=False)
+            
+            if push_to_hub:
+                if not os.getenv("HF_USERNAME"):
+                    st.warning("HF_USERNAME environment variable is not set. Cannot push to Hub.")
+                    
+            if st.button("Export Dataset", use_container_width=True):
+                try:
+                    with st.spinner("Exporting data..."):
+                        # Set dataset name in environment if provided
+                        if dataset_name != data_manager.dataset_name:
+                            os.environ["HF_DATASET_NAME"] = dataset_name
+                            data_manager.dataset_name = dataset_name
+                        
+                        result = data_manager.export_to_hf_dataset(push_to_hub=push_to_hub)
+                        
+                        if push_to_hub and "dataset_name" in result:
+                            st.success(f"Dataset pushed to Hugging Face Hub: {result['dataset_name']}")
+                        else:
+                            st.success("Dataset created successfully")
+                except Exception as e:
+                    st.error(f"Error exporting dataset: {str(e)}")
+                    logging.error(f"Export error: {e}")
+        
+        with col2:
+            st.subheader("Import from Hugging Face")
+            hf_dataset = st.text_input("Dataset path (e.g., 'username/dataset'):")
+            split = st.selectbox("Dataset split:", ["train", "test", "validation"])
+            
+            if st.button("Import Dataset", use_container_width=True):
+                if not hf_dataset:
+                    st.warning("Please enter a dataset path")
+                else:
+                    try:
+                        with st.spinner(f"Importing data from {hf_dataset}..."):
+                            result = data_manager.import_from_hf_dataset(hf_dataset, split=split)
+                            st.success(f"Successfully imported {result['records_imported']} records")
+                    except Exception as e:
+                        st.error(f"Error importing dataset: {str(e)}")
+                        logging.error(f"Import error: {e}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+                        
+        # Explore Hugging Face Datasets
+        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+        st.subheader("Explore Public Datasets")
+        
+        dataset_options = {
+            "text classification": [
+                "glue", 
+                "imdb", 
+                "ag_news",
+                "emotion"
+            ],
+            "summarization": [
+                "cnn_dailymail",
+                "samsum",
+                "xsum"
+            ],
+            "question answering": [
+                "squad",
+                "ms_marco",
+                "natural_questions"
+            ]
+        }
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            task = st.selectbox("Task:", list(dataset_options.keys()))
+            
+        with col2:
+            dataset_choice = st.selectbox("Dataset:", dataset_options[task])
+        
+        if st.button("Preview Dataset", use_container_width=True):
+            try:
+                with st.spinner(f"Loading {dataset_choice}..."):
+                    dataset = model_handler.load_hf_dataset(dataset_choice)
+                    sample = dataset.select(range(min(5, len(dataset))))
+                    
+                    # Convert sample to DataFrame and display
+                    df = pd.DataFrame(sample)
+                    
+                    # If the DataFrame is too wide, select only the most important columns
+                    if len(df.columns) > 5:
+                        important_cols = [col for col in ['text', 'label', 'question', 'answer', 'title', 'summary'] 
+                                         if col in df.columns]
+                        if important_cols:
+                            df = df[important_cols]
+                    
+                    st.dataframe(df, use_container_width=True)
+                    st.info(f"Shown {len(sample)} samples out of {len(dataset)} total")
+            except Exception as e:
+                st.error(f"Error loading dataset: {str(e)}")
+                logging.error(f"Dataset preview error: {e}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with tab5:
+        st.markdown("""
+        <div class="rag-card">
+        <h2>Application Settings</h2>
+        <p>Configure API keys, user preferences, and model settings.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Environment settings
+        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+        st.subheader("Environment Variables")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            hf_api_key = st.text_input("Hugging Face API Key:", 
+                                       value="●●●●●●●●●●" if os.getenv("HUGGINGFACE_API_KEY") else "",
+                                       type="password")
+            hf_username = st.text_input("Hugging Face Username:", 
+                                       value=os.getenv("HF_USERNAME", ""))
+            hf_dataset = st.text_input("Default Dataset Name:", 
+                                      value=os.getenv("HF_DATASET_NAME", "text_classification_dataset"))
+            
+            if st.button("Save Settings", use_container_width=True):
+                # We don't actually save the API key in environment variables
+                # as they would only persist for this session
+                if hf_api_key and hf_api_key != "●●●●●●●●●●":
+                    st.info("For security, API keys should be set as environment variables before starting the application")
+                    os.environ["HUGGINGFACE_API_KEY"] = hf_api_key
+                
+                if hf_username:
+                    os.environ["HF_USERNAME"] = hf_username
+                    
+                if hf_dataset:
+                    os.environ["HF_DATASET_NAME"] = hf_dataset
+                    data_manager.dataset_name = hf_dataset
+                
+                st.success("Settings updated for this session")
+                
+                # Note that we need to reinitialize components if API key changed
+                if hf_api_key and hf_api_key != "●●●●●●●●●●":
+                    st.warning("API key changed. Please refresh the page for changes to take effect.")
+        
+        with col2:
+            st.subheader("Model Settings")
+            
+            if model_handler:
+                available_models = model_handler.available_models
+                
+                for task, model_id in available_models.items():
+                    st.markdown(f"""
+                    <div style="padding: 0.5rem; border-radius: 4px; background-color: #f8f9fa; margin-bottom: 0.5rem;">
+                    <strong>{task}:</strong> <code>{model_id}</code>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if rag_system:
+                    st.markdown(f"""
+                    <div style="padding: 0.5rem; border-radius: 4px; background-color: #f8f9fa; margin-bottom: 0.5rem;">
+                    <strong>RAG Embedding Model:</strong> <code>{rag_system.embedding_model_name}</code>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            st.info("To change models, update the configuration in the respective handler files.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Application theme
+        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+        st.subheader("Application Theme")
+        
+        if "theme" not in st.session_state:
+            st.session_state.theme = "light"
+            
+        theme_col1, theme_col2 = st.columns(2)
+        
+        with theme_col1:
+            selected_theme = st.radio(
+                "Select theme:",
+                ["Light", "Dark", "Blue"]
+            )
+            
+            if selected_theme.lower() != st.session_state.theme:
+                st.session_state.theme = selected_theme.lower()
+                st.info("Theme will be applied on next reload")
+                
+        with theme_col2:
+            st.markdown(f"""
+            <div style="padding: 1rem; border-radius: 8px; background-color: {'#f8f9fa' if selected_theme == 'Light' else '#212529' if selected_theme == 'Dark' else '#e2f0fd'}; color: {'#212529' if selected_theme == 'Light' or selected_theme == 'Blue' else '#f8f9fa'};">
+            <strong>Theme Preview</strong>
+            <p>This is how text will appear.</p>
+            <button style="background-color: {'#1f6feb' if selected_theme == 'Light' or selected_theme == 'Blue' else '#0d6efd'}; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px;">Button</button>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # About section
+        st.markdown('<div class="rag-card">', unsafe_allow_html=True)
+        st.subheader("About PasteTheTextHere")
+        
+        st.markdown("""
+        **Version:** 1.0.0
+        
+        PasteTheTextHere is an advanced text processing application that leverages Hugging Face models and datasets with Retrieval-Augmented Generation (RAG) capabilities.
+        
+        - [View on GitHub](https://github.com/Daanworg/PasteTheTextHere)
+        - [Report an issue](https://github.com/Daanworg/PasteTheTextHere/issues)
+        """)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+except Exception as e:
+    st.error(f"Application error: {str(e)}")
+    logging.error(f"Application error: {e}")
