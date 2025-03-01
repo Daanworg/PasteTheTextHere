@@ -4,6 +4,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 import re
 import logging
+import os
 
 class TextProcessor:
     def __init__(self):
@@ -14,10 +15,15 @@ class TextProcessor:
 
     def _download_nltk_data(self):
         """Download required NLTK data with proper error handling"""
-        required_packages = ['punkt', 'stopwords', 'wordnet']
+        # Create nltk_data directory if it doesn't exist
+        nltk_data_dir = os.path.expanduser('~/nltk_data')
+        os.makedirs(nltk_data_dir, exist_ok=True)
+
+        required_packages = ['punkt', 'stopwords', 'wordnet', 'averaged_perceptron_tagger']
         for package in required_packages:
             try:
-                nltk.download(package, quiet=True)
+                nltk.download(package, quiet=True, download_dir=nltk_data_dir)
+                logging.info(f"Successfully downloaded NLTK package: {package}")
             except Exception as e:
                 logging.error(f"Failed to download NLTK package {package}: {e}")
                 raise RuntimeError(f"Failed to initialize NLTK: {str(e)}")
