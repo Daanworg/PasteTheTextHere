@@ -1,4 +1,12 @@
 import streamlit as st
+
+# Set up the page - MUST be the first Streamlit command
+st.set_page_config(
+    page_title="Text Processing App",
+    page_icon="📝",
+    layout="wide"
+)
+
 from text_processor import TextProcessor
 from model_handler import ModelHandler
 from data_manager import DataManager
@@ -31,18 +39,11 @@ try:
     # Initialize components
     text_processor, model_handler, data_manager, rag_system = init_components()
 
-    # Set up the page
-    st.set_page_config(
-        page_title="Text Processing App",
-        page_icon="📝",
-        layout="wide"
-    )
-
     # Main title with description
     st.title("📝 Advanced Text Processing and Analysis")
     st.markdown("""
     This application provides powerful text processing capabilities including:
-    - Text cleaning and preprocessing
+    - Text cleaning and preprocessing 
     - Classification with custom labels
     - Summarization
     - RAG-based question answering
