@@ -1,5 +1,5 @@
 import nltk
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 import re
@@ -40,8 +40,13 @@ class TextProcessor:
             # Remove special characters and digits
             text = re.sub(r'[^a-zA-Z\s]', '', text)
 
-            # Tokenize
-            tokens = word_tokenize(text)
+            # Tokenize using word_tokenize directly
+            try:
+                tokens = word_tokenize(text)
+            except LookupError:
+                # Fallback to basic splitting if NLTK tokenization fails
+                tokens = text.split()
+                logging.warning("Falling back to basic tokenization")
 
             # Remove stopwords if requested
             if remove_stopwords:
@@ -64,8 +69,14 @@ class TextProcessor:
             return {}
 
         try:
-            words = word_tokenize(text)
-            sentences = nltk.sent_tokenize(text)
+            # Use basic splitting as fallback if tokenization fails
+            try:
+                words = word_tokenize(text)
+                sentences = sent_tokenize(text)
+            except LookupError:
+                words = text.split()
+                sentences = text.split('.')
+                logging.warning("Using basic text statistics due to NLTK tokenization failure")
 
             return {
                 'word_count': len(words),
