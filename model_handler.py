@@ -12,6 +12,7 @@ class ModelHandler:
         logging.info("Initializing ModelHandler with HuggingFace API key")
         self.classifier = None
         self.zero_shot_classifier = None
+        self.summarizer = None
 
         # Initialize models with better error handling
         try:
@@ -48,6 +49,16 @@ class ModelHandler:
                 device=-1  # Force CPU usage
             )
             logging.info("Zero-shot classification pipeline initialized successfully")
+
+            # Summarization pipeline
+            logging.info("Initializing summarization pipeline...")
+            self.summarizer = pipeline(
+                "summarization",
+                model="facebook/bart-large-cnn",
+                token=self.api_key,
+                device=-1  # Force CPU usage
+            )
+            logging.info("Summarization pipeline initialized successfully")
 
         except Exception as e:
             logging.error(f"Error initializing models: {str(e)}")
@@ -90,3 +101,30 @@ class ModelHandler:
         except Exception as e:
             logging.error(f"Classification error: {str(e)}")
             raise RuntimeError(f"Failed to classify text: {str(e)}")
+
+    def summarize_text(self, text, max_length=150, min_length=30):
+        """Generate a summary of the input text"""
+        if not text:
+            return ""
+
+        try:
+            logging.info("Starting text summarization...")
+            if not self.summarizer:
+                raise RuntimeError("Summarizer not initialized")
+
+            # Calculate appropriate max_length based on input text length
+            input_length = len(text.split())
+            max_length = min(max_length, input_length // 2)  # Summary should not be longer than half the input
+            min_length = min(min_length, max_length - 1)  # Ensure min_length is less than max_length
+
+            result = self.summarizer(
+                text,
+                max_length=max_length,
+                min_length=min_length,
+                do_sample=False
+            )
+
+            return result[0]['summary_text']
+        except Exception as e:
+            logging.error(f"Summarization error: {str(e)}")
+            raise RuntimeError(f"Failed to summarize text: {str(e)}")
